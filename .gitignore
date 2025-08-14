@@ -1,1 +1,4 @@
 .env
+private_key.bin
+log.txt
+__pycache__
