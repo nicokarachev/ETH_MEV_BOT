@@ -3,6 +3,7 @@ import logging
 import asyncio
 import websockets
 import json
+import constant
 from hexbytes import HexBytes
 from pathlib import Path
 from web3 import Web3
@@ -61,12 +62,12 @@ class UniswapV2Monitor:
         self, 
         web3_provider, 
         web3_provicer_socket,
-        router_address = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", 
-        factory_address = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-        swap_event_signature = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
-        filter_volume = 2.5,
-        filter_slippage = 5
-        ):
+        router_address = constant.ROUTER_ADDRESS, 
+        factory_address = constant.FACTORY_ADDRESS,
+        filter_volume = constant.FILTER_VOLUME,
+        filter_slippage = constant.FILTER_SLIPPAGE,
+        weth_address = constant.WETH_ADDRESS,
+        multicall_address = constant.MULTICALL_ADDRESS):
         """
         Monitor Uniswap V2 swap transactions
         
@@ -82,66 +83,43 @@ class UniswapV2Monitor:
         print("✅ Connected to Ethereum mainnet")
 
         self.w3soc = web3_provicer_socket
+        
+        if not self.w3.is_connected():
+            print("❌ Connection failed with Socket")
+            exit()
+
+        print("✅ Connected to Ethereum mainnet with Socket")
                 
         # Uniswap V2 Router address
         self.router_address = router_address
+        self.router_contract = self.w3.eth.contract(
+            address = self.router_address,
+            abi = constant.ROUTER_ABI
+        )
         
         # Uniswap V2 Factory address
         self.factory_address = factory_address
+        self.factory_contract = self.w3.eth.contract(
+            address = self.factory_address,
+            abi = constant.FACTORY_ABI
+        )
         
-        # Event signatures (keccak256 hashes)
-        self.swap_event_signature = swap_event_signature
-        
+        # Uniswap Multicall address
+        self.multicall_address = multicall_address
+        self.multicall_contract = self.w3.eth.contract(
+            address = self.multicall_address,
+            abi = constant.MULTICALL_ABI
+        )
+                
         # Transaction Volume Thresold(Ether amount, over $10k)
         self.filter_volume = filter_volume
         
         # Slippage Thresold(percentage, 5 is 0.5%)
         self.filter_slippage = filter_slippage
         
-        # ABI for parsing events
-        self.pair_abi = [
-            {
-                "anonymous": False,
-                "inputs": [
-                    {"indexed": True, "name": "sender", "type": "address"},
-                    {"indexed": False, "name": "amount0In", "type": "uint256"},
-                    {"indexed": False, "name": "amount1In", "type": "uint256"},
-                    {"indexed": False, "name": "amount0Out", "type": "uint256"},
-                    {"indexed": False, "name": "amount1Out", "type": "uint256"},
-                    {"indexed": True, "name": "to", "type": "address"}
-                ],
-                "name": "Swap",
-                "type": "event"
-            }
-        ]
+        # WETH address
+        self.weth_address = weth_address
         
-        self.router_abi = [
-            {
-                "inputs": [
-                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
-                    {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
-                    {"internalType": "address[]", "name": "path", "type": "address[]"},
-                    {"internalType": "address", "name": "to", "type": "address"},
-                    {"internalType": "uint256", "name": "deadline", "type": "uint256"}
-                ],
-                "name": "swapExactTokensForTokens",
-                "outputs": [{"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
-            {
-                "inputs": [
-                    {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
-                    {"internalType": "address[]", "name": "path", "type": "address[]"},
-                    {"internalType": "address", "name": "to", "type": "address"},
-                    {"internalType": "uint256", "name": "deadline", "type": "uint256"}
-                ],
-                "name": "swapExactETHForTokens",
-                "outputs": [{"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}],
-                "stateMutability": "payable",
-                "type": "function"
-            }
-        ]
       
     def decode_swap_event(self, log):
         """Decode Uniswap V2 Swap event from log"""
@@ -196,9 +174,7 @@ class UniswapV2Monitor:
             # Check if transaction is to Uniswap Router
             if not transaction['to'] or transaction['to'].lower() != self.router_address.lower():
                 return None
-            
-            print(transaction)
-            
+                        
             # Check if transaction has swap method signatures
             input_data = transaction['input'].hex()
             
@@ -206,7 +182,7 @@ class UniswapV2Monitor:
             
             if swap_flag == False:
                 return None
-                                    
+                        
             swap_info = {
                 'tx_hash': tx_hash,
                 'block_number': transaction['blockNumber'],
@@ -214,8 +190,20 @@ class UniswapV2Monitor:
                 'to_address': transaction['to'],
                 'gas_price': transaction['gasPrice'],
                 'value': transaction['value'],  # ETH value sent
-                'swaps': []
+                'out': int(input_data[8:72], 16),
+                'token': input_data[8+64*5:]
             }
+                        
+            if swap_info['value'] < self.filter_volume:
+                return None
+                        
+            print(tx_hash)
+            print(f"eth value: {swap_info['value']}")
+            print(f"token amount: {swap_info['out']}")
+            
+            
+            
+                       
             
         except Exception as e:
             logging.error(f"Error parsing transaction {tx_hash}: {e}")
@@ -257,55 +245,4 @@ class UniswapV2Monitor:
                 await asyncio.sleep(5)
 
     def handle_swap_detected(self, swap_info):
-        """Handle detected swap transaction"""
-        logging.info(f"🔄 SWAP DETECTED!")
-        logging.info(f"   TX Hash: {swap_info['tx_hash']}")
-        logging.info(f"   Block: {swap_info['block_number']}")
-        logging.info(f"   From: {swap_info['from_address']}")
-        logging.info(f"   Gas Used: {swap_info['gas_used']:,}")
         
-        for i, swap in enumerate(swap_info['swaps']):
-            logging.info(f"   Swap {i+1}:")
-            logging.info(f"     Pair: {swap['pair_address']}")
-            logging.info(f"     Amount0In: {swap['amount0In']:,}")
-            logging.info(f"     Amount1In: {swap['amount1In']:,}")
-            logging.info(f"     Amount0Out: {swap['amount0Out']:,}")
-            logging.info(f"     Amount1Out: {swap['amount1Out']:,}")
-        
-        logging.info("-" * 50)
-        
-        # Add your custom logic here
-        # For example: save to database, send alerts, analyze patterns, etc.
-
-        """Monitor swaps for a specific pair"""
-        self.specific_pair = pair_address.lower()
-        logging.info(f"Monitoring specific pair: {pair_address}")
-        
-        # Create filter for Swap events on specific pair
-        try:
-            swap_filter = self.w3.eth.filter({
-                'address': pair_address,
-                'topics': [self.swap_event_signature]
-            })
-            
-            logging.info(f"Created filter for pair {pair_address}")
-            
-            while True:
-                try:
-                    # Get new swap events
-                    for log in swap_filter.get_new_entries():
-                        swap_data = self.decode_swap_event(log)
-                        if swap_data:
-                            logging.info(f"🔄 Pair swap detected:")
-                            logging.info(f"   Pair: {swap_data['pair_address']}")
-                            logging.info(f"   Amounts In: {swap_data['amount0In']}, {swap_data['amount1In']}")
-                            logging.info(f"   Amounts Out: {swap_data['amount0Out']}, {swap_data['amount1Out']}")
-                    
-                    asyncio.sleep(1)
-                    
-                except Exception as e:
-                    logging.error(f"Filter error: {e}")
-                    asyncio.sleep(5)
-                    
-        except KeyboardInterrupt:
-            logging.info("Stopping pair monitoring...")
