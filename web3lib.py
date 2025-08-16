@@ -74,7 +74,10 @@ class UniswapV2Monitor:
         Args:
             web3_provider: Web3 HTTP/WebSocket provider URL
         """
-        self.w3 = Web3(Web3.HTTPProvider(web3_provider))
+        
+        print(f"here ! {web3_provicer_socket}")
+        
+        self.w3 = Web3(Web3.LegacyWebSocketProvider(web3_provicer_socket))
         
         if not self.w3.is_connected():
             print("❌ Connection failed")
@@ -83,12 +86,6 @@ class UniswapV2Monitor:
         print("✅ Connected to Ethereum mainnet")
 
         self.w3soc = web3_provicer_socket
-        
-        if not self.w3.is_connected():
-            print("❌ Connection failed with Socket")
-            exit()
-
-        print("✅ Connected to Ethereum mainnet with Socket")
                 
         # Uniswap V2 Router address
         self.router_address = router_address
@@ -108,7 +105,7 @@ class UniswapV2Monitor:
         self.multicall_address = multicall_address
         self.multicall_contract = self.w3.eth.contract(
             address = self.multicall_address,
-            abi = constant.MULTICALL_ABI
+            abi = constant.MULTICALL3_ABI
         )
                 
         # Transaction Volume Thresold(Ether amount, over $10k)
@@ -163,28 +160,30 @@ class UniswapV2Monitor:
                 return True
         return False
             
-    async def handle_pending_tx_async(self, tx_hash):
+    async def handle_pending_tx_async(self, transaction):
         """Parse swap transaction details"""
         
         try:
-            # Get transaction and receipt
-            transaction = self.w3.eth.get_transaction(tx_hash)
-            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+                        
+            print(transaction['hash'])
+            
             
             # Check if transaction is to Uniswap Router
             if not transaction['to'] or transaction['to'].lower() != self.router_address.lower():
                 return None
                         
             # Check if transaction has swap method signatures
-            input_data = transaction['input'].hex()
+            input_data = transaction['input']
             
-            swap_flag = self.check_swap(input_data)           
+            swap_flag = self.check_swap(input_data)         
             
             if swap_flag == False:
                 return None
+            
+            print("swap tx")  
                         
             swap_info = {
-                'tx_hash': tx_hash,
+                'tx_hash': transaction['hash'],
                 'block_number': transaction['blockNumber'],
                 'from_address': transaction['from'],
                 'to_address': transaction['to'],
@@ -193,27 +192,35 @@ class UniswapV2Monitor:
                 'out': int(input_data[8:72], 16),
                 'token': input_data[8+64*5:]
             }
+            
+            print(swap_info['tx_hash'])
+            print(f"eth value: {swap_info['value']}")
+            print(f"token amount: {swap_info['out']}")
                         
             if swap_info['value'] < self.filter_volume:
                 return None
                         
-            print(tx_hash)
-            print(f"eth value: {swap_info['value']}")
-            print(f"token amount: {swap_info['out']}")
+            
             
             
             
                        
             
         except Exception as e:
-            logging.error(f"Error parsing transaction {tx_hash}: {e}")
+            logging.error(f"Error parsing transaction {transaction['hash']}: {e}")
             return None
             
     async def subscribe_to_pending_txs(self, websocket):
         subscription = {
-            "jsonrpc": "2.0",
+            "jsonrpc": "2.0", 
             "method": "eth_subscribe",
-            "params": ["newPendingTransactions"],
+            "params": [
+                "alchemy_pendingTransactions",
+                {
+                    "toAddress": [self.router_address], 
+                    "hashesOnly": False
+                }
+            ],
             "id": 1
         }
         await websocket.send(json.dumps(subscription))
@@ -225,14 +232,16 @@ class UniswapV2Monitor:
             try:
                 data = json.loads(message)
                 if 'params' in data and 'result' in data['params']:
-                    tx_hash = data['params']['result']
-                    asyncio.create_task(self.handle_pending_tx_async(tx_hash))
+                    transaction = data['params']['result']
+                    asyncio.create_task(self.handle_pending_tx_async(transaction))
             except Exception as e:
                 print(f"Error processing message: {e}")
 
     async def monitor_mempool(self):
         """Monitor mempool for pending Uniswap transactions (requires WebSocket)"""
         logging.info("Monitoring mempool for Uniswap swaps...")
+        
+        print(f"why? {self.w3soc}")
         
         while True:
             try:
@@ -245,4 +254,4 @@ class UniswapV2Monitor:
                 await asyncio.sleep(5)
 
     def handle_swap_detected(self, swap_info):
-        
+        return None

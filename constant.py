@@ -6,11 +6,24 @@ load_dotenv()
 
 # Get private key from environment
 PRIV_KEY = os.getenv('PRIV_KEY')
-RPC_URL = os.getenv('RPC_URL')
-WEBSOCKET_URL = os.getenv('WEBSOCKET_URL')
 
-FILTER_VOLUME = os.getenv('FILTER_ETH_AMOUNT') * pow(10, 18)
+RPC_URL = os.getenv('RPC_URL')
+if RPC_URL is None:
+    raise ValueError("RPC_URL is not set in environment variables")
+
+WEBSOCKET_URL = os.getenv('WEBSOCKET_URL')
+if WEBSOCKET_URL is None:
+    raise ValueError("WEBSOCKET_URL is not set in environment variables")
+print(WEBSOCKET_URL)
+
+FILTER_VOLUME = os.getenv('FILTER_ETH_AMOUNT')
+if FILTER_VOLUME is None:
+    FILTER_VOLUME = 2.5
+FILTER_VOLUME = int(float(FILTER_VOLUME) * (10 ** 18))
+
 FILTER_SLIPPAGE = os.getenv('FILTER_SLIPPAGE')
+if FILTER_SLIPPAGE is None:
+    FILTER_SLIPPAGE = 5
 
 ROUTER_ADDRESS = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
 FACTORY_ADDRESS = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
